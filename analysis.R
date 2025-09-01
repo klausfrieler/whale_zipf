@@ -71,6 +71,12 @@ remove_repetitions <- function(x){
   x[start_pos]  
 }
 
+
+tidy_rle <- function(x){
+  r <- rle(x)
+  tibble(values = r$values, len = r$lengths, start_pos = cumsum(lag(len, 1, 0)))
+}
+
 check_for_power_law <- function(data, target = "segment", n_sims = 100, type = c("displ", "disexp"), with_plot = F){
   m_m <- data  %>%  count(!!sym(target), sort = T) %>% pull(n) 
   r <- tibble(n = m_m, r = 1:length(m_m)) %>% 
@@ -170,6 +176,64 @@ setup_workspace <- function(){
   
 }
 
+peak_picking <- function(x, thresh = .5){
+  tmp <- tibble(x, 
+                lag = lag(x, 1), 
+                lead = lead(x,1)) %>% 
+    mutate( max = x >= lag & x >= lead & x >= thresh) %>% 
+    pull(max) %>% 
+    as.integer()
+  tmp
+}
+
+get_period <- function(sac, x = NULL){
+  #browser()
+  l <- length(sac %>% filter(peak == 1) %>% pull(lag))
+  if(l == 0){
+    #browser()
+    return(0)
+  }
+  sac %>% filter(peak == 1) %>% pull(lag) %>% min()
+}
+
+get_sound_to_pitch_map <- function(x, min_pitch = 55, max_pitch = 79){
+  #browser()
+  pitch_map <- jazzodata::esac_transforms %>% 
+    filter(pitch_raw >= min_pitch, pitch_raw <= max_pitch) %>% 
+    count(pitch_raw, sort = T) %>% 
+    mutate(r = 1:nrow(.))
+  #browser()
+  pm <- x %>% count(sound, sort = T) %>% mutate(r = 1:nrow(.)) %>% left_join(pitch_map, by = "r")  
+  #pm <- parsed_sounds %>% count(main, sort = T) %>% mutate(r = 1:nrow(.)) %>% left_join(pitch_map, by = "r")  
+  
+  pm$pitch_raw %>% set_names(pm$sound)
+}
+
+
+sounds_to_midi <- function(x, min_pitch = 55, max_pitch = 70, beat_dur = .5){
+  pm <- get_sound_to_pitch_map(x, min_pitch, max_pitch)
+  #sounds <- str_split(x$sound, ",")[[1]]
+  sounds <- x$sound
+  #browser()
+  l <- length(sounds)
+  n_bars <- floor(l/4) + 1
+  #browser()
+  tmp <- tibble(onset = beat_dur * (1:length(sounds)), 
+                pitch = pm[sounds], duration = beat_dur) %>% 
+    mutate(id = 0:(nrow(.)-1))
+  tmp <- tmp %>% 
+    mutate(period = 4, 
+           division = 1, 
+           tatum = 1, 
+           beat_duration = beat_dur, 
+           signature = "4/4", 
+           phrase_id = 1, 
+           chord = "NC", 
+           chorus_id = 1)
+  tmp %>%  mutate(bar  = rep(1:n_bars, each = 4)[1:l], beat = rep(1:4, n_bars)[1:l]) %>% select(-id)
+
+}
+
 symbolic_ac <- function(x, max_lag = 10){
   max_lag <- min(length(x), max_lag)
   map_dfr(0:max_lag, function(i){
@@ -177,7 +241,8 @@ symbolic_ac <- function(x, max_lag = 10){
     #browser()
     r <- mean(na.omit(x[1:n] == lead(x, i)))
     tibble(lag = i, r = r)
-  })
+  }) %>% 
+    mutate(peak = peak_picking(r)) 
 }
 
 parse_sounds <- function(x){
