@@ -1,5 +1,5 @@
 library(tidyverse)
-
+library(poweRlaw)
 messagef <- function(...) message(sprintf(...))
 
 example <- c('nm(pul)', 'dhq', 'sq', 'dhq', 'sq', 'dhq', 'sq', 'nm(pul)')
@@ -76,7 +76,10 @@ tidy_rle <- function(x){
   r <- rle(x)
   tibble(values = r$values, len = r$lengths, start_pos = cumsum(lag(len, 1, 0)))
 }
-
+explode_hist <- function(x){
+  h <- hist(x, plot = F)
+  tibble(x = rep(1:length(h$counts), h$counts))
+}
 check_for_power_law <- function(data, target = "segment", n_sims = 100, type = c("displ", "disexp"), with_plot = F){
   m_m <- data  %>%  count(!!sym(target), sort = T) %>% pull(n) 
   r <- tibble(n = m_m, r = 1:length(m_m)) %>% 
@@ -86,6 +89,7 @@ check_for_power_law <- function(data, target = "segment", n_sims = 100, type = c
   
   #browser()
   map_dfr(type, function(tp){
+    browser()
     if(tp == "displ"){
       m_m <- m_m %>% displ$new(.)
       m_m$setXmin(estimate_xmin(m_m))
@@ -200,9 +204,10 @@ get_sound_to_pitch_map <- function(x, min_pitch = 55, max_pitch = 79){
   #browser()
   pitch_map <- jazzodata::esac_transforms %>% 
     filter(pitch_raw >= min_pitch, pitch_raw <= max_pitch) %>% 
-    count(pitch_raw, sort = T) %>% 
-    mutate(r = 1:nrow(.))
-  #browser()
+    count(pitch_raw, sort = F) %>% 
+    arrange(pitch_raw) %>% 
+    mutate(r = 1:nrow(.)) 
+  browser()
   pm <- x %>% count(sound, sort = T) %>% mutate(r = 1:nrow(.)) %>% left_join(pitch_map, by = "r")  
   #pm <- parsed_sounds %>% count(main, sort = T) %>% mutate(r = 1:nrow(.)) %>% left_join(pitch_map, by = "r")  
   
@@ -214,7 +219,7 @@ sounds_to_midi <- function(x, min_pitch = 55, max_pitch = 70, beat_dur = .5){
   pm <- get_sound_to_pitch_map(x, min_pitch, max_pitch)
   #sounds <- str_split(x$sound, ",")[[1]]
   sounds <- x$sound
-  #browser()
+  browser()
   l <- length(sounds)
   n_bars <- floor(l/4) + 1
   #browser()
