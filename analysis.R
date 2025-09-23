@@ -76,20 +76,27 @@ tidy_rle <- function(x){
   r <- rle(x)
   tibble(values = r$values, len = r$lengths, start_pos = cumsum(lag(len, 1, 0)))
 }
+
 explode_hist <- function(x){
   h <- hist(x, plot = F)
   tibble(x = rep(1:length(h$counts), h$counts))
 }
+
+explode_freqs <- function(freqs){
+  rep(1:length(freqs), freqs)  
+}
+
 check_for_power_law <- function(data, target = "segment", n_sims = 100, type = c("displ", "disexp"), with_plot = F){
+  browser()
   m_m <- data  %>%  count(!!sym(target), sort = T) %>% pull(n) 
   r <- tibble(n = m_m, r = 1:length(m_m)) %>% 
     mutate(log_r = log(r), log_n = log(n)) %>% 
-    select(log_r, log_n) %>% 
-    correlation::correlation()
+    correlation::correlation(select = c("r", "log_r"), select2 = "log_n") %>% 
+    select(r, p) 
   
   #browser()
   map_dfr(type, function(tp){
-    browser()
+    #browser()
     if(tp == "displ"){
       m_m <- m_m %>% displ$new(.)
       m_m$setXmin(estimate_xmin(m_m))
@@ -112,8 +119,9 @@ check_for_power_law <- function(data, target = "segment", n_sims = 100, type = c
     }
     tibble(p = bs_p$p, type = tp, par = estimate_pars(m_m)$pars, xmin = estimate_xmin(m_m)$xmin)
   }) %>% 
-    bind_rows(r %>% select(r, p) %>%  mutate(par = r*r, type = "log_log_reg") 
-              %>% select(-r)) %>% 
+    bind_rows(r %>% 
+                select(r, p) %>%  
+                mutate(par = r*r, type = c("log_reg", "log_log_reg")) ) %>% 
     mutate(p = round(p, 4))
    
 }
@@ -352,4 +360,92 @@ check_all_songs <- function(with_segments = T){
       mutate(song_id = sid)
   }) %>% 
     mutate(segment_based = with_segments)
+}
+
+generate_cat_distr <- function(size = 26, N = 1000, method = "beta"){
+  if(method == "beta"){
+    ps <- rbeta(size, 30, 3)
+    ps <- ps/sum(ps)
+    ret <- round( ps * N)
+    browser()
+    return(explode_freqs(ret) )
+  }
+  ret <- list()
+  left <- N
+  for(i in 1:size){
+    f <- sample(seq(1, left/4), 1)
+    ret[i] <- f
+    left <- left -f
+    if(left <= 0){
+      left <- 1
+    }
+  }
+  unlist(ret) %>% explode_freqs() 
+}
+
+accuracy <- function(tab){
+  sum(diag(tab))/sum(tab)
+}
+
+F1 <- function(tab){
+  2*tab[2, 2]/(2*tab[2, 2] + tab[1, 2] + tab[2,1])
+}
+
+cmp_phrase_pred <- function(){
+  melids <- unique(jazzodata::wjd_transforms$melid)
+  melids <- unique(jazzodata::esac_transforms$id)
+  melids <- sample(melids, 500)
+  map_dfr(melids, function(mid){
+    #browser()
+    #solo <- jazzodata::wjd_transforms %>% filter(melid == mid) %>% mutate(t = 1:n()) 
+    solo <- jazzodata::esac_transforms %>% filter(id == mid) %>% 
+      mutate(phrase_begin = as.integer(phrase_id_raw != lag(phrase_id_raw))) 
+    
+    int_segs <- solo %>% get_segments(target = "int_raw")
+    
+    int_ppm <- ppm::new_ppm_simple(alphabet_size = length(unique(solo$int_raw)))
+    int_mod <- model_seq(int_ppm,
+                         solo %>%
+                           pull(int_raw) %>%
+                           as.factor() %>%
+                           as.integer() %>%
+                           na.omit()) %>%
+      mutate(t = 1:n()) %>%
+      mutate(lag = lag(information_content),
+             lead = lead(information_content)) 
+    int_mod <- int_mod %>%
+      mutate(peak = replace_na(information_content > lag &
+                                 information_content > lead, FALSE)) %>%
+      mutate(peak = as.integer(peak))  %>%
+      mutate(phrase_beg = as.integer(t %in% int_segs$start_pos), 
+             phrase_begin = solo$phrase_begin[1:(nrow(solo)-1)])
+    
+    tab_ppm <-int_mod %>% 
+      with(., table(phrase_begin, peak))
+    # %>%
+    #   caret::confusionMatrix() %>% 
+    #   pluck("byClass") %>% 
+    #   pluck("F1")
+    tab_whale <-int_mod %>% 
+      with(., table(phrase_begin, phrase_beg)) 
+    # %>%
+    #   caret::confusionMatrix() %>% 
+    #   pluck("byClass") %>% 
+    #   pluck("F1")
+    tab_cmp <-int_mod %>% 
+      with(., table(peak, phrase_beg)) 
+    # %>%
+    #   caret::confusionMatrix() %>% 
+    #   pluck("byClass") %>% 
+    #   pluck("F1")
+    
+    tibble(melid = mid, 
+           F1_ppm = F1(tab_ppm),
+           F1_whale = F1(tab_whale),
+           F1_cmp = F1(tab_cmp),
+           acc_ppm = accuracy(tab_ppm),
+           acc_whale = accuracy(tab_whale),
+           acc_cmp = accuracy(tab_cmp)
+    )
+  })
 }
